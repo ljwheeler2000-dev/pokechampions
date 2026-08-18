@@ -1,0 +1,7 @@
+node_modules/
+dist/
+vendor/damage-calc/
+*.log
+.DS_Store
+vendor/calc-esm/
+tsconfig.tsbuildinfo
