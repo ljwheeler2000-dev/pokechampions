@@ -1,136 +1,124 @@
 # pokechampions
 
-Damage calculator engine for **Pokémon Champions**. TypeScript, zero runtime dependencies.
+Team-building tools for **Pokemon Champions** doubles (Regulation M-B).
 
-Champions replaces mainline EVs/IVs with **SP (Stat Points)**, so a generic damage calculator
-silently computes the wrong stats. This library implements the Champions stat formulas, the
-game's damage formula with its exact rounding behaviour, and a breakpoint scanner for finding
-the cheapest bulk investment that survives a given hit.
+Champions replaces mainline EVs/IVs with **SP** - 66 points per Pokemon, 32 max in
+any one stat, no IVs - so a generic calculator silently computes the wrong stats.
+This project puts a Champions SP layer over Smogon's damage engine and adds the
+doubles-specific tooling a generic calculator does not have.
 
-Engine only — no UI.
+Status: engine and turn simulator are built and tested. UI is next.
 
-## Install
+## Why @smogon/calc
+
+`@smogon/calc` already ships the Champions dataset - 208 roster species, 99 Mega
+forms including the Champions-original ones, 942 moves with target flags, plus
+items and abilities. Spot-checked against the live calc: `Staraptor-Mega` reads
+Fighting/Flying 85/140/100/60/90/110 and `Sceptile-Mega` has Lightning Rod with
+base 145 Speed. No hand-maintained dex, and every ability/item/field interaction
+comes from a maintained engine rather than being reimplemented.
+
+## The SP adapter
+
+The mapping is exact, not a fit. At level 50 with 31 IVs and 0 EVs the standard
+formula reduces to `Base + 75` (HP) and `Base + 20` (everything else) - which is
+the Champions formula minus the SP term:
+
+```
+HP    = Base + 75 + SP
+Other = floor((Base + 20 + SP) x Nature)     <- nature applies AFTER SP
+```
+
+So shifting a species' base stats by its SP investment reproduces Champions stats
+through Smogon's own math. The Champions nature multiplier is baked into the shift
+and Smogon's nature is left neutral, so it is applied exactly once and in the right
+order. The shift survives Smogon's internal `clone()` because clone passes the
+species override through.
+
+`test/crosscheck.test.ts` holds this honest: a from-scratch Champions engine
+(`src/damage.ts`, written before the adapter existed and pinned to calc-verified
+stat lines) must agree with `@smogon/calc` on every one of the 16 damage rolls.
+
+## What's built
+
+**`src/champions/sp.ts`** - SP budget and validation (66 total / 32 per stat),
+nature table, Champions stat formulas, minimum-investment helpers.
+
+**`src/champions/adapter.ts`** - the SP-to-shifted-base-stat adapter, dex lookups,
+and effective Speed including Choice Scarf, weather abilities, Tailwind, paralysis
+and stat stages.
+
+**`src/sim/turn.ts`** - one full doubles turn:
+
+- speed and priority order, with Trick Room reversal and Tailwind
+- spread targeting (`allAdjacent` hits your ally too; `allAdjacentFoes` does not)
+- the 0.75 spread reduction applied only when the move really hits more than one
+- redirection: Lightning Rod, Storm Drain, Follow Me, Rage Powder
+- absorbing abilities with their effects - Lightning Rod's +1 SpA, Motor Drive,
+  Sap Sipper, Volt/Water Absorb, Flash Fire, Earth Eater, Well-Baked Body
+- friendly fire, Protect, immunities, and KOs removing a Pokemon from the turn
+- per-slot HP and boosts after the turn, plus a readable event log
+
+Effects created earlier in the turn are visible to later actions, so a Lightning
+Rod boost banked by a fast ally actually raises the damage of the slower attacker.
+
+## Usage
+
+```ts
+import { simulateTurn } from './src/sim/turn.js';
+
+const rotom = {
+  species: 'Rotom-Wash', label: 'Rotom-Wash', nature: 'Timid',
+  sp: { spa: 32, spe: 32, hp: 2 }, ability: 'Levitate', item: 'Choice Scarf',
+};
+const sceptile = {
+  species: 'Sceptile-Mega', label: 'Mega Sceptile', nature: 'Timid',
+  sp: { spa: 32, spe: 32, hp: 2 }, ability: 'Lightning Rod',
+};
+
+const result = simulateTurn(
+  { A1: rotom, A2: sceptile, B1: charizardY, B2: kingambit },
+  [
+    { slot: 'A1', move: 'Discharge' },
+    { slot: 'A2', move: 'Dragon Pulse', target: 'B1' },
+  ],
+  { weather: '', terrain: '', trickRoom: false, sideA: {}, sideB: {} },
+  'max',
+);
+
+result.order;   // ['A1', 'A2'] - Rotom at 226 moves before Sceptile at 216
+result.events;  // per-action log incl. the Lightning Rod absorb
+result.final;   // HP and boosts on all four slots after the turn
+```
+
+## Speed note
+
+Mega Sceptile at max Speed SP is **216**. Rotom-Wash needs the full 32 Speed SP
+*and* a Choice Scarf to reach **226** and move first - at 10 Speed SP + Scarf it
+sits at 190 and moves second, so a Discharge fired for the Lightning Rod boost
+lands after Sceptile has already attacked. The simulator reports the order, so
+this is checkable rather than assumed.
+
+## Roadmap
+
+1. Turn simulator UI
+2. SP tuner - cheapest legal spread that survives a threat list / OHKOs a target list
+3. Team builder - six slots, coverage matrix, roster legality, the 7-step methodology
+4. Speed tiers - the roster at 0 and 32 SP per nature, with Scarf/Tailwind/Trick Room views
+
+## Development
 
 ```bash
 npm install
-npm test
-npm run build
+npm test        # 87 tests
+npm run typecheck
 ```
 
-## Champions stat rules
-
-- 66 SP total per Pokémon, max 32 SP in any one stat.
-- IVs do not exist — every Pokémon is effectively 31 in every stat.
-- `HP = Base + 75 + SP`
-- `Other = floor((Base + 20 + SP) × Nature)` — nature applies **after** SP, not before.
-
-All four formulas are covered by tests pinned to values read off the live Champions calc.
-
-## Quick start
-
-```ts
-import { calculateDamage, computeStats, DEX } from 'pokechampions';
-
-const rotom = {
-  species: DEX['Rotom-Wash'],
-  nature: 'Timid',
-  sp: { hp: 24, spa: 32, spe: 10 },
-};
-
-const staraptor = {
-  species: DEX['Staraptor-Mega'],
-  nature: 'Hardy',
-  sp: { atk: 32, hp: 32, spd: 2 },
-};
-
-computeStats(rotom);
-// { hp: 149, atk: 76, def: 127, spa: 157, spd: 127, spe: 127 }
-
-const result = calculateDamage(
-  rotom,
-  staraptor,
-  { name: 'Discharge', type: 'Electric', category: 'Special', basePower: 80, spread: true },
-  { gameType: 'Doubles' },
-);
-
-result.description;  // "50 - 59.4% -- guaranteed 2HKO"
-result.damage;       // all 16 rolls
-result.ohkoChance;   // 0
-```
-
-## Breakpoints
-
-Damage does not fall smoothly as Defense rises — the formula floors at several points, so it
-drops in discrete steps. `findBreakpoints` locates those cliffs so investment lands on one
-instead of being wasted between them.
-
-```ts
-import { findBreakpoints, findSurvivalSP } from 'pokechampions';
-
-// Raw scan, mirroring the damage-rounding calculator.
-findBreakpoints({
-  attackStat: 157,
-  basePower: 80,
-  defMin: 90,
-  defMax: 140,
-  spread: true,
-  stab: true,
-  typeEffectiveness: 2,
-});
-// [{ def: 91, maxDamageDrop: 2, ... }, { def: 94, maxDamageDrop: 4, ... }, ...]
-
-// Set-based: cheapest SP investment that survives a specific attack.
-const { spToGuaranteedSurvival, budgetWarning } = findSurvivalSP(attacker, defender, move);
-```
-
-`findSurvivalSP` also reports `spToPossibleSurvival` (survives at least one roll) and warns
-when the required investment would bust the 66 SP budget.
-
-## What the engine models
-
-**Stats** — Champions SP formulas, natures, stat stages (−6..+6), SP budget validation,
-minimum-investment helpers.
-
-**Damage** — base damage, the 16 rolls, spread-move ×0.75 in Doubles, weather, crits
-(ignoring defender boosts and screens), STAB and Adaptability, type effectiveness,
-burn, and the chained final modifier stack: Reflect / Light Screen / Aurora Veil,
-Multiscale, Friend Guard, Filter / Solid Rock / Prism Armor, Life Orb, Tinted Lens,
-Neuroforce, resist berries. Items: Choice Band/Specs/Scarf, Life Orb, Assault Vest, Eviolite.
-
-Modifiers are chained in 4096ths and applied with the game's round-half-down rule, which is
-what makes the breakpoints appear in the first place.
-
-**Types** — full 18×18 chart with combined dual-type multipliers, plus `defensiveProfile`,
-`weaknesses`, `resistances` and `immunities` for team-level coverage checks.
-
-## Species data
-
-`src/dex.ts` is deliberately small. Champions has original Mega Evolutions whose stats,
-typings and abilities do **not** match mainline — Staraptor-Mega is Fighting/Flying with
-Contrary — so entries are only added once confirmed against the live Champions calc.
-Each entry records which stats are confirmed; `unconfirmedStats()` reports the rest.
-
-The engine takes `Species` objects as input, so you can pass your own without editing the dex:
-
-```ts
-import { defineSpecies } from 'pokechampions';
-
-const mon = defineSpecies('Whatever', ['Water', 'Ghost'],
-  { hp: 90, atk: 100, def: 90, spa: 120, spd: 90, spe: 95 }, 'Water Absorb');
-```
+`src/damage.ts`, `src/stats.ts`, `src/typechart.ts`, `src/breakpoints.ts` and
+`src/dex.ts` are the earlier standalone engine. They are kept deliberately as the
+independent half of the cross-check, not as dead code.
 
 ## Reference
 
 - Champions calc: https://calc.pokemonshowdown.com/champions.html (Champions mode, level 50, Doubles)
-- Rounding/breakpoint calc: https://jenkinsvgc.github.io/damage-rounding-calc/
-
-## Tests
-
-66 tests across stats, type chart, damage and breakpoints. The stat tests are pinned to
-values verified against the live calc; the damage and breakpoint tests assert structural
-invariants (monotonicity, roll ordering, modifier direction, minimum 1 damage).
-
-```bash
-npm test
-npm run typecheck
-```
+- Roster (rotates; current snapshot valid to 2026-09-02): https://bulbapedia.bulbagarden.net/wiki/List_of_Pok%C3%A9mon_in_Pok%C3%A9mon_Champions
