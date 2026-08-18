@@ -1,7 +1,8 @@
 node_modules/
 dist/
 vendor/damage-calc/
+vendor/calc-esm/
 *.log
 .DS_Store
-vendor/calc-esm/
 tsconfig.tsbuildinfo
+package-lock.json
