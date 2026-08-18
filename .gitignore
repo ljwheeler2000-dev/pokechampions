@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.netlify/
 vendor/damage-calc/
 vendor/calc-esm/
 *.log
