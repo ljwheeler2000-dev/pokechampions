@@ -7,7 +7,33 @@ any one stat, no IVs - so a generic calculator silently computes the wrong stats
 This project puts a Champions SP layer over Smogon's damage engine and adds the
 doubles-specific tooling a generic calculator does not have.
 
-Status: engine and turn simulator are built and tested. UI is next.
+Status: complete and working. Turn simulator, SP tuner, team builder and speed tiers,
+with 127 tests.
+
+```bash
+npm install
+npm run dev
+```
+
+## The app
+
+**Turn simulator** - four slots, per-slot move and target, the full field toggle set, and an
+event log naming which roll was applied to each hit. Defaults to worst case: your attacks
+roll minimum, theirs roll maximum, because a plan that survives that survives in practice.
+
+**SP tuner** - give it a threat list and it finds the cheapest legal HP/Def/SpD investment
+that survives all of them, treating whatever you put into Speed and offence as committed.
+When nothing works it says which threat is unsurvivable and by how much, rather than
+returning a spread that quietly fails. Also solves the cheapest offence for a guaranteed KO,
+judged on the minimum roll.
+
+**Team builder** - six slots with live SP legality, a defensive coverage matrix, shared
+weaknesses, types nothing resists, the Reg M-B S-tier as a matchup checklist, and the
+seven-step framework as a checklist. Teams persist locally.
+
+**Speed tiers** - the whole roster at 0 SP, max neutral, max positive nature and with a
+Scarf, with your set placed in the order. Opponents are measured at their ceiling, and a
+clean win is separated from one a Choice Scarf would flip.
 
 ## Why @smogon/calc
 
@@ -39,7 +65,14 @@ species override through.
 (`src/damage.ts`, written before the adapter existed and pinned to calc-verified
 stat lines) must agree with `@smogon/calc` on every one of the 16 damage rolls.
 
-## What's built
+## Roster legality
+
+Only Regular Roster M-B Pokemon can be picked - the species search offers nothing else, so
+an illegal pick is impossible rather than merely flagged. That matters because the Smogon
+dex carries 22 Megas that are not legal here. Rotom appliance forms, cap Pikachu exclusions,
+Battle Bond Greninja and transfer-only Floette-Eternal are all handled.
+
+## What's under the UI
 
 **`src/champions/sp.ts`** - SP budget and validation (66 total / 32 per stat),
 nature table, Champions stat formulas, minimum-investment helpers.
@@ -47,6 +80,14 @@ nature table, Champions stat formulas, minimum-investment helpers.
 **`src/champions/adapter.ts`** - the SP-to-shifted-base-stat adapter, dex lookups,
 and effective Speed including Choice Scarf, weather abilities, Tailwind, paralysis
 and stat stages.
+
+**`src/champions/roster.ts`** - the Reg M-B roster and legality rules.
+
+**`src/champions/coverage.ts`** - type chart and team-level defensive coverage.
+
+**`src/tune/sp.ts`** - the defensive and offensive SP solvers.
+
+**`src/tune/speed.ts`** - speed tiers and target-speed investment.
 
 **`src/sim/turn.ts`** - one full doubles turn:
 
@@ -62,7 +103,7 @@ and stat stages.
 Effects created earlier in the turn are visible to later actions, so a Lightning
 Rod boost banked by a fast ally actually raises the damage of the slower attacker.
 
-## Usage
+## Usage from code
 
 ```ts
 import { simulateTurn } from './src/sim/turn.js';
@@ -83,7 +124,6 @@ const result = simulateTurn(
     { slot: 'A2', move: 'Dragon Pulse', target: 'B1' },
   ],
   { weather: '', terrain: '', trickRoom: false, sideA: {}, sideB: {} },
-  'max',
 );
 
 result.order;   // ['A1', 'A2'] - Rotom at 226 moves before Sceptile at 216
@@ -99,26 +139,29 @@ sits at 190 and moves second, so a Discharge fired for the Lightning Rod boost
 lands after Sceptile has already attacked. The simulator reports the order, so
 this is checkable rather than assumed.
 
-## Roadmap
-
-1. Turn simulator UI
-2. SP tuner - cheapest legal spread that survives a threat list / OHKOs a target list
-3. Team builder - six slots, coverage matrix, roster legality, the 7-step methodology
-4. Speed tiers - the roster at 0 and 32 SP per nature, with Scarf/Tailwind/Trick Room views
-
 ## Development
 
 ```bash
 npm install
-npm test        # 87 tests
+npm run dev        # app on localhost:5173
+npm test           # 127 tests
 npm run typecheck
+npm run build
 ```
 
 `src/damage.ts`, `src/stats.ts`, `src/typechart.ts`, `src/breakpoints.ts` and
 `src/dex.ts` are the earlier standalone engine. They are kept deliberately as the
 independent half of the cross-check, not as dead code.
 
+## Caveats worth keeping in mind
+
+- Opposing SP spreads are assumptions, not scouted data. Directions are sound;
+  exact percentages are provisional.
+- The roster snapshot expires 2026-09-02. Re-check Bulbapedia after that.
+- "Best outcome for them" currently means the maximum damage roll. It does not yet
+  assume they crit or that secondary effects land.
+
 ## Reference
 
 - Champions calc: https://calc.pokemonshowdown.com/champions.html (Champions mode, level 50, Doubles)
-- Roster (rotates; current snapshot valid to 2026-09-02): https://bulbapedia.bulbagarden.net/wiki/List_of_Pok%C3%A9mon_in_Pok%C3%A9mon_Champions
+- Roster (rotates): https://bulbapedia.bulbagarden.net/wiki/List_of_Pokemon_in_Pokemon_Champions
