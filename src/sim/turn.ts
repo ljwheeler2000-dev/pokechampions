@@ -21,6 +21,23 @@ export const foesOf = (s: SlotId): SlotId[] => (sideOf(s) === 'A' ? ['B1', 'B2']
 
 export type Roll = 'min' | 'avg' | 'max';
 
+/**
+ * Which roll to assume when applying damage.
+ *
+ * 'pessimistic' is the default and the one worth trusting for team building:
+ * your side (A) rolls minimum on its own attacks, the opponent (B) rolls maximum
+ * on theirs. A plan that still works under that assumption works in practice.
+ * The fixed options force the same roll on both sides, which flatters whichever
+ * side happens to benefit.
+ */
+export type RollPolicy = Roll | 'pessimistic';
+
+/** Resolve the policy to a concrete roll for a given attacking side. */
+export function rollForSide(policy: RollPolicy, attackerSide: 'A' | 'B'): Roll {
+  if (policy !== 'pessimistic') return policy;
+  return attackerSide === 'A' ? 'min' : 'max';
+}
+
 export interface SideField {
   tailwind?: boolean;
   reflect?: boolean;
@@ -78,10 +95,14 @@ export interface TurnEvent {
     ko?: boolean;
     desc?: string;
     note?: string;
+    /** Which roll was actually applied to HP for this hit. */
+    rollUsed?: Roll;
   }>;
 }
 
 export interface TurnResult {
+  /** The roll policy this result was produced under. */
+  policy: RollPolicy;
   order: SlotId[];
   events: TurnEvent[];
   final: Record<SlotId, { name: string; hp: number; maxHP: number; percent: number; fainted: boolean; boosts: SlotState['boosts'] }>;
@@ -175,7 +196,7 @@ export function simulateTurn(
   sets: Record<SlotId, ChampionsSet | null>,
   actions: TurnAction[],
   field: TurnField,
-  roll: Roll = 'max',
+  policy: RollPolicy = 'pessimistic',
 ): TurnResult {
   const warnings: string[] = [];
   const state = {} as Record<SlotId, SlotState | null>;
@@ -358,6 +379,7 @@ export function simulateTurn(
         continue;
       }
 
+      const roll = rollForSide(policy, sideOf(action.slot));
       const applied = Math.min(t.hp, pickRoll(dmg, roll));
       const before = t.hp;
       t.hp = Math.max(0, t.hp - applied);
@@ -372,7 +394,7 @@ export function simulateTurn(
         minDamage: min, maxDamage: max, applied,
         minPercent: Math.round((min / t.maxHP) * 1000) / 10,
         maxPercent: Math.round((max / t.maxHP) * 1000) / 10,
-        hpBefore: before, hpAfter: t.hp, ko, desc,
+        hpBefore: before, hpAfter: t.hp, ko, desc, rollUsed: roll,
       });
     }
 
@@ -393,5 +415,5 @@ export function simulateTurn(
     };
   }
 
-  return { order: ordered.map((a) => a.slot), events, final, warnings };
+  return { policy, order: ordered.map((a) => a.slot), events, final, warnings };
 }
